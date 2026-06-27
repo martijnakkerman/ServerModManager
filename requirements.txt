@@ -1,0 +1,4 @@
+PyQt6>=6.6
+requests>=2.31
+packaging>=23.0
+pytest>=8.0
