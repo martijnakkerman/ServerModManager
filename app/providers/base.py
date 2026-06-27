@@ -66,6 +66,15 @@ class Provider(Protocol):
     ) -> Optional[LatestVersion]:
         ...
 
+    def list_versions(
+        self,
+        project_id: str,
+        loader: str,
+        mc_version: str,
+        accept_same_minor: bool = True,
+    ) -> list[LatestVersion]:
+        ...
+
     def download_file(self, url: str, dest_path: Path) -> bool:
         ...
 

@@ -115,6 +115,11 @@ class ModMatch:
     latest: Optional[LatestVersion] = None
     status: Status = Status.UNKNOWN
     error: str = ""
+    # Pinning: a manually chosen version is locked and skipped by bulk updates.
+    pinned: bool = False
+    pinned_version_id: Optional[str] = None
+
+    PIN_COLOR = "#a78bfa"  # purple
 
     @property
     def display_name(self) -> str:
@@ -135,3 +140,16 @@ class ModMatch:
     @property
     def has_update(self) -> bool:
         return self.status == Status.UPDATE_AVAILABLE
+
+    @property
+    def updatable(self) -> bool:
+        """Eligible for bulk update / the row checkbox: has an update and not pinned."""
+        return self.has_update and not self.pinned
+
+    @property
+    def pill_label(self) -> str:
+        return "Pinned" if self.pinned else self.status.label
+
+    @property
+    def pill_color(self) -> str:
+        return self.PIN_COLOR if self.pinned else self.status.color

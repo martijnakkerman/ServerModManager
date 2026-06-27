@@ -17,7 +17,7 @@ import zipfile
 from datetime import datetime
 from pathlib import Path
 
-from app.models import ModMatch, VersionIdentity
+from app.models import LatestVersion, ModMatch, VersionIdentity
 from app.providers.base import Provider
 from app.services import resolver
 from app.services.scanner import compute_hashes, murmur2_fingerprint
@@ -48,9 +48,18 @@ def _backup_existing(jar_path: Path) -> Path:
 
 def update_mod(match: ModMatch, provider: Provider) -> Path:
     """Download + install ``match.latest`` for this mod. Returns the new path."""
-    latest = match.latest
-    if not latest or not latest.download_url:
+    return install_version(match, provider, match.latest)
+
+
+def install_version(match: ModMatch, provider: Provider, target: LatestVersion) -> Path:
+    """Download + install a specific ``target`` version, then re-resolve status.
+
+    Used both for ordinary updates (target == latest) and for the per-mod version
+    selector (target == any compatible version, e.g. a downgrade).
+    """
+    if not target or not target.download_url:
         raise UpdateError(f"No download URL for {match.display_name}")
+    latest = target
 
     mod = match.mod
     mods_dir = mod.jar_path.parent

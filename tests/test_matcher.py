@@ -7,7 +7,8 @@ from pathlib import Path
 
 from app.models import InstalledMod, LatestVersion, Status, VersionIdentity
 from app.providers.base import ProviderMatch
-from app.services.matcher import match_and_resolve
+from app.models import ModMatch
+from app.services.matcher import apply_pins, match_and_resolve
 
 
 def _mod(sha1: str, name: str) -> InstalledMod:
@@ -88,3 +89,23 @@ def test_disabled_provider_skipped():
     cf = FakeProvider("curseforge", known={"sha_a": ProviderMatch("curseforge", "x")}, latest={}, enabled=False)
     results = match_and_resolve([a], [cf], loader="neoforge", mc_version="1.21.1")
     assert results[0].source == ""
+
+
+def test_apply_pins_marks_and_clears():
+    m1 = ModMatch(mod=_mod("s1", "A"), project_id="pA")
+    m2 = ModMatch(mod=_mod("s2", "B"), project_id="pB")
+    apply_pins([m1, m2], {"pA": "ver123"})
+    assert m1.pinned and m1.pinned_version_id == "ver123"
+    assert not m2.pinned
+    # Re-applying with an empty pin set clears it.
+    apply_pins([m1], {})
+    assert not m1.pinned and m1.pinned_version_id is None
+
+
+def test_pinned_mod_not_updatable():
+    from app.models import LatestVersion as LV, Status as St
+    m = ModMatch(mod=_mod("s", "A"), project_id="p", status=St.UPDATE_AVAILABLE)
+    assert m.updatable
+    apply_pins([m], {"p": "v1"})
+    assert m.has_update and not m.updatable  # still has an update, but locked
+    assert m.pill_label == "Pinned"

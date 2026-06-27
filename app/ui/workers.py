@@ -7,11 +7,11 @@ from pathlib import Path
 
 from PyQt6.QtCore import QThread, pyqtSignal
 
-from app.models import ModMatch
+from app.models import LatestVersion, ModMatch
 from app.providers.base import Provider
 from app.services.matcher import match_and_resolve
 from app.services.scanner import scan_mods_folder
-from app.services.updater import UpdateError, update_mod
+from app.services.updater import UpdateError, install_version, update_mod
 
 log = logging.getLogger(__name__)
 
@@ -77,3 +77,51 @@ class UpdateWorker(QThread):
                 log.exception("Update failed")
                 self.mod_failed.emit(match, f"Unexpected: {e}")
         self.all_done.emit()
+
+
+class VersionsWorker(QThread):
+    """Lazily fetch all compatible versions for one mod (for the picker)."""
+
+    done = pyqtSignal(object, list)   # ModMatch, list[LatestVersion]
+    error = pyqtSignal(object, str)
+
+    def __init__(self, match: ModMatch, provider: Provider, loader, mc_version, accept_same_minor):
+        super().__init__()
+        self.match = match
+        self.provider = provider
+        self.loader = loader
+        self.mc_version = mc_version
+        self.accept_same_minor = accept_same_minor
+
+    def run(self):
+        try:
+            versions = self.provider.list_versions(
+                self.match.project_id, self.loader, self.mc_version, self.accept_same_minor
+            )
+            self.done.emit(self.match, versions)
+        except Exception as e:  # noqa: BLE001
+            log.exception("Version list failed")
+            self.error.emit(self.match, str(e))
+
+
+class InstallVersionWorker(QThread):
+    """Install one specific chosen version of a single mod."""
+
+    done = pyqtSignal(object)          # ModMatch
+    failed = pyqtSignal(object, str)   # ModMatch, error
+
+    def __init__(self, match: ModMatch, provider: Provider, target: LatestVersion):
+        super().__init__()
+        self.match = match
+        self.provider = provider
+        self.target = target
+
+    def run(self):
+        try:
+            install_version(self.match, self.provider, self.target)
+            self.done.emit(self.match)
+        except UpdateError as e:
+            self.failed.emit(self.match, str(e))
+        except Exception as e:  # noqa: BLE001
+            log.exception("Install version failed")
+            self.failed.emit(self.match, f"Unexpected: {e}")

@@ -27,10 +27,11 @@ from PyQt6.QtWidgets import (
 )
 
 from app.config import COMMON_MC_VERSIONS, LOADERS, Config, load_config, save_config
-from app.models import ModMatch, Status
+from app.models import LatestVersion, ModMatch, Status
 from app.providers.curseforge import CurseForgeProvider
 from app.providers.modrinth import ModrinthProvider
 from app.services.dependency import check_dependencies
+from app.services.matcher import apply_pins
 from app.services.side_detector import find_client_only
 from app.ui.dialogs.client_only_dialog import ClientOnlyDialog
 from app.ui.dialogs.restore_dialog import RestoreDialog
@@ -44,7 +45,12 @@ from app.ui.mod_table import (
     ModTableModel,
     StatusPillDelegate,
 )
-from app.ui.workers import ScanWorker, UpdateWorker
+from app.ui.workers import (
+    InstallVersionWorker,
+    ScanWorker,
+    UpdateWorker,
+    VersionsWorker,
+)
 
 log = logging.getLogger(__name__)
 
@@ -58,6 +64,10 @@ class MainWindow(QMainWindow):
         self.matches: list[ModMatch] = []
         self._scan_worker: ScanWorker | None = None
         self._update_worker: UpdateWorker | None = None
+        self._versions_worker: VersionsWorker | None = None
+        self._install_worker: InstallVersionWorker | None = None
+        self._current: ModMatch | None = None
+        self._current_versions: list[LatestVersion] = []
         self._build_providers()
         self._build_ui()
         if self.cfg.server_mods_path:
@@ -190,10 +200,34 @@ class MainWindow(QMainWindow):
         return self.table
 
     def _build_detail(self) -> QWidget:
+        panel = QWidget()
+        v = QVBoxLayout(panel)
+        v.setContentsMargins(0, 0, 0, 0)
+
         self.detail = QTextBrowser()
         self.detail.setOpenExternalLinks(True)
         self.detail.setHtml("<p style='color:#9aa0ac'>Select a mod to see details.</p>")
-        return self.detail
+        v.addWidget(self.detail, 1)
+
+        # Version picker row.
+        self.version_box = QWidget()
+        vb = QVBoxLayout(self.version_box)
+        vb.setContentsMargins(0, 8, 0, 0)
+        vb.addWidget(QLabel("Version"))
+        row = QHBoxLayout()
+        self.version_combo = QComboBox()
+        self.version_combo.setMinimumWidth(180)
+        self.install_version_btn = QPushButton("Install")
+        self.install_version_btn.clicked.connect(self._install_selected_version)
+        self.unpin_btn = QPushButton("Unpin")
+        self.unpin_btn.clicked.connect(self._unpin_current)
+        row.addWidget(self.version_combo, 1)
+        row.addWidget(self.install_version_btn)
+        row.addWidget(self.unpin_btn)
+        vb.addLayout(row)
+        self.version_box.setVisible(False)
+        v.addWidget(self.version_box)
+        return panel
 
     # ------------------------------------------------------------------ #
     # Settings / selectors
@@ -256,6 +290,7 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(f"Checking {name} ({done}/{total})")
 
     def _on_scan_done(self, matches: list[ModMatch]):
+        apply_pins(matches, self.cfg.pins)
         self.matches = matches
         self.model.set_matches(matches)
         self.proxy.sort(COL_STATUS, Qt.SortOrder.AscendingOrder)
@@ -282,13 +317,16 @@ class MainWindow(QMainWindow):
         if not idxs:
             return
         m = idxs[0].data(MATCH_ROLE)
-        if isinstance(m, ModMatch):
-            self.detail.setHtml(self._detail_html(m))
+        if not isinstance(m, ModMatch):
+            return
+        self._current = m
+        self.detail.setHtml(self._detail_html(m))
+        self._load_versions(m)
 
     def _detail_html(self, m: ModMatch) -> str:
-        c = m.status.color
+        c = m.pill_color
         rows = [
-            ("Status", f"<span style='color:{c}'>{escape(m.status.label)}</span>"),
+            ("Status", f"<span style='color:{c}'>{escape(m.pill_label)}</span>"),
             ("Installed", escape(m.current_version)),
             ("Latest", escape(m.latest_version) if m.has_update else "—"),
             ("Source", escape(m.source or "unidentified")),
@@ -313,6 +351,107 @@ class MainWindow(QMainWindow):
         )
 
     # ------------------------------------------------------------------ #
+    # Per-mod version picker
+    # ------------------------------------------------------------------ #
+    def _load_versions(self, m: ModMatch):
+        self._current_versions = []
+        self.version_combo.clear()
+        if not m.source or not m.project_id:
+            self.version_box.setVisible(False)
+            return
+        self.version_box.setVisible(True)
+        self.unpin_btn.setVisible(m.pinned)
+        self.version_combo.setEnabled(False)
+        self.install_version_btn.setEnabled(False)
+        self.version_combo.addItem("Loading versions…")
+        provider = self.providers and {p.name: p for p in self.providers}.get(m.source)
+        if not provider:
+            return
+        self._versions_worker = VersionsWorker(
+            m, provider, self.loader_combo.currentText(),
+            self.mc_combo.currentText().strip(), self.cfg.accept_same_minor,
+        )
+        self._versions_worker.done.connect(self._on_versions_loaded)
+        self._versions_worker.error.connect(lambda mm, e: self._on_versions_loaded(mm, []))
+        self._versions_worker.start()
+
+    def _on_versions_loaded(self, m: ModMatch, versions: list[LatestVersion]):
+        if m is not self._current:
+            return  # selection changed while loading
+        self._current_versions = versions
+        self.version_combo.clear()
+        if not versions:
+            self.version_combo.addItem("No compatible versions")
+            self.version_combo.setEnabled(False)
+            self.install_version_btn.setEnabled(False)
+            return
+        installed_id = m.installed.version_id if m.installed else None
+        latest_id = versions[0].version_id
+        select_row = 0
+        for i, v in enumerate(versions):
+            tags = []
+            if v.version_id == latest_id:
+                tags.append("latest")
+            if installed_id and v.version_id == installed_id:
+                tags.append("installed")
+                select_row = i
+            if m.pinned and v.version_id == m.pinned_version_id:
+                tags.append("pinned")
+                select_row = i
+            suffix = f"  ({', '.join(tags)})" if tags else ""
+            self.version_combo.addItem(f"{v.version_number}{suffix}", v)
+        self.version_combo.setCurrentIndex(select_row)
+        self.version_combo.setEnabled(True)
+        self.install_version_btn.setEnabled(True)
+
+    def _install_selected_version(self):
+        m = self._current
+        target = self.version_combo.currentData()
+        if not m or not isinstance(target, LatestVersion):
+            return
+        provider = {p.name: p for p in self.providers}.get(m.source)
+        if not provider:
+            return
+        self.install_version_btn.setEnabled(False)
+        self.version_combo.setEnabled(False)
+        self.statusBar().showMessage(f"Installing {m.display_name} {target.version_number}…")
+        self._install_worker = InstallVersionWorker(m, provider, target)
+        self._install_worker.done.connect(lambda mm, t=target: self._on_version_installed(mm, t))
+        self._install_worker.failed.connect(self._on_version_install_failed)
+        self._install_worker.start()
+
+    def _on_version_installed(self, m: ModMatch, target: LatestVersion):
+        # Pin to the chosen version (a manual choice locks it).
+        self.cfg.pins[m.project_id] = target.version_id
+        save_config(self.cfg)
+        apply_pins([m], self.cfg.pins)
+        self.model.refresh_row(m)
+        if m is self._current:
+            self.detail.setHtml(self._detail_html(m))
+            self._load_versions(m)
+        self.statusBar().showMessage(
+            f"Installed & pinned {m.display_name} {target.version_number}.", 5000
+        )
+
+    def _on_version_install_failed(self, m: ModMatch, msg: str):
+        self.install_version_btn.setEnabled(True)
+        self.version_combo.setEnabled(True)
+        QMessageBox.warning(self, "Install failed", f"{m.display_name}: {msg}")
+        self.statusBar().showMessage("Install failed.", 5000)
+
+    def _unpin_current(self):
+        m = self._current
+        if not m or not m.project_id:
+            return
+        self.cfg.pins.pop(m.project_id, None)
+        save_config(self.cfg)
+        apply_pins([m], self.cfg.pins)
+        self.model.refresh_row(m)
+        self.unpin_btn.setVisible(False)
+        self.detail.setHtml(self._detail_html(m))
+        self.statusBar().showMessage(f"Unpinned {m.display_name}.", 4000)
+
+    # ------------------------------------------------------------------ #
     # Updates
     # ------------------------------------------------------------------ #
     def _update_selected(self):
@@ -320,10 +459,10 @@ class MainWindow(QMainWindow):
 
     def _update_all(self):
         self.model.check_all_updates()
-        self._run_updates([m for m in self.matches if m.has_update])
+        self._run_updates([m for m in self.matches if m.updatable])
 
     def _run_updates(self, targets: list[ModMatch]):
-        targets = [m for m in targets if m.has_update and m.latest and m.latest.download_url]
+        targets = [m for m in targets if m.updatable and m.latest and m.latest.download_url]
         if not targets:
             QMessageBox.information(self, "Update", "No updatable mods selected.")
             return

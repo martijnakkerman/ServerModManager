@@ -35,6 +35,9 @@ unit-tested in [tests/test_resolver.py](tests/test_resolver.py).
 - **Selectable loader + MC version** with an "accept same minor line" option
   (e.g. a file tagged `1.21` counts for `1.21.1`).
 - **Deterministic update detection** — no false positives.
+- **Per-mod version selector** — pick any compatible version from the detail
+  panel (incl. downgrades). A manually chosen version is **pinned** and skipped
+  by "Update all available" until you unpin it.
 - **One-click update** with timestamped backups in `mods/.backup/`.
 - **Client-only detection** — flags mods that shouldn't be on a server and
   quarantines them to `mods/.removed/<timestamp>/` (restore any batch later).

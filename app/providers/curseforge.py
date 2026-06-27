@@ -133,13 +133,14 @@ class CurseForgeProvider:
     # ------------------------------------------------------------------ #
     # Latest version
     # ------------------------------------------------------------------ #
-    def latest_version(
+    def list_versions(
         self,
         project_id: str,
         loader: str,
         mc_version: str,
         accept_same_minor: bool = True,
-    ) -> Optional[LatestVersion]:
+    ) -> list[LatestVersion]:
+        """All compatible files for this loader + MC, newest-first."""
         params = {
             "gameVersion": mc_version,
             "pageSize": 50,
@@ -150,17 +151,25 @@ class CurseForgeProvider:
             params["modLoaderType"] = loader_type
         data = self._request("GET", f"/mods/{project_id}/files", params=params)
         if not isinstance(data, dict):
-            return None
+            return []
         files = [f for f in data.get("data", []) if isinstance(f, dict)]
         compatible = [
             f
             for f in files
             if is_mc_compatible(f.get("gameVersions", []), mc_version, accept_same_minor)
         ]
-        if not compatible:
-            return None
         compatible.sort(key=lambda f: f.get("fileDate", ""), reverse=True)
-        return self._to_latest(compatible[0])
+        return [self._to_latest(f) for f in compatible]
+
+    def latest_version(
+        self,
+        project_id: str,
+        loader: str,
+        mc_version: str,
+        accept_same_minor: bool = True,
+    ) -> Optional[LatestVersion]:
+        versions = self.list_versions(project_id, loader, mc_version, accept_same_minor)
+        return versions[0] if versions else None
 
     @staticmethod
     def _to_latest(f: dict) -> LatestVersion:

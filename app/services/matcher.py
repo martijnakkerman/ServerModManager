@@ -76,3 +76,15 @@ def match_and_resolve(
 
     # Preserve the scan order of the input list.
     return [matches[m.sha1] for m in mods]
+
+
+def apply_pins(matches: list[ModMatch], pins: dict[str, str]) -> None:
+    """Mark matches whose project is pinned (project_id -> version_id) in place."""
+    for m in matches:
+        pinned_id = pins.get(m.project_id or "")
+        if pinned_id:
+            m.pinned = True
+            m.pinned_version_id = pinned_id
+        else:
+            m.pinned = False
+            m.pinned_version_id = None

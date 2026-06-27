@@ -28,6 +28,8 @@ class Config:
     curseforge_api_key: str = ""
     accept_same_minor: bool = True
     keep_backups: int = 10
+    # Pinned versions: project_id -> version_id (locked, skipped by bulk updates).
+    pins: dict = field(default_factory=dict)
     extra: dict = field(default_factory=dict)
 
 

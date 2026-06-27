@@ -55,7 +55,7 @@ class ModTableModel(QAbstractTableModel):
         return [self._matches[i] for i in sorted(self._checked) if i < len(self._matches)]
 
     def check_all_updates(self):
-        self._checked = {i for i, m in enumerate(self._matches) if m.has_update}
+        self._checked = {i for i, m in enumerate(self._matches) if m.updatable}
         self._emit_all()
 
     def clear_checks(self):
@@ -80,7 +80,7 @@ class ModTableModel(QAbstractTableModel):
 
     def flags(self, index):
         base = Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable
-        if index.column() == COL_CHECK and self._matches[index.row()].has_update:
+        if index.column() == COL_CHECK and self._matches[index.row()].updatable:
             return base | Qt.ItemFlag.ItemIsUserCheckable
         return base
 
@@ -94,7 +94,7 @@ class ModTableModel(QAbstractTableModel):
             return m
 
         if role == Qt.ItemDataRole.CheckStateRole and col == COL_CHECK:
-            if not m.has_update:
+            if not m.updatable:
                 return None
             return (
                 Qt.CheckState.Checked
@@ -110,7 +110,7 @@ class ModTableModel(QAbstractTableModel):
             if col == COL_LATEST:
                 return m.latest_version if m.has_update else ""
             if col == COL_STATUS:
-                return m.status.label
+                return m.pill_label
             if col == COL_SOURCE:
                 return m.source or "—"
 
@@ -158,7 +158,7 @@ class ModFilterProxy(QSortFilterProxyModel):
         m = model.match_at(source_row)
         if not m:
             return True
-        haystack = f"{m.display_name} {m.status.label} {m.source} {m.mod.jar_path.name}".lower()
+        haystack = f"{m.display_name} {m.pill_label} {m.source} {m.mod.jar_path.name}".lower()
         return self._text in haystack
 
     def lessThan(self, left, right):
@@ -180,9 +180,9 @@ class StatusPillDelegate(QStyledItemDelegate):
 
         painter.save()
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        color = QColor(m.status.color)
+        color = QColor(m.pill_color)
 
-        text = m.status.label
+        text = m.pill_label
         metrics = option.fontMetrics
         tw = metrics.horizontalAdvance(text)
         pad_x, pill_h = 11, 22

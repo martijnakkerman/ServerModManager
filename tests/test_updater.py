@@ -9,7 +9,7 @@ from pathlib import Path
 
 from app.models import InstalledMod, LatestVersion, ModMatch, Status, VersionIdentity
 from app.services import resolver
-from app.services.updater import UpdateError, list_backups, update_mod
+from app.services.updater import UpdateError, install_version, list_backups, update_mod
 
 
 def _valid_jar_bytes(marker: str) -> bytes:
@@ -76,6 +76,33 @@ def test_update_swaps_backs_up_and_marks_up_to_date(tmp_path):
     # ...and re-resolving (as a fresh scan would) keeps it up to date.
     resolver.resolve(match)
     assert match.status == Status.UP_TO_DATE
+
+
+def test_install_specific_older_version_then_update_available(tmp_path):
+    # Installing an older (non-latest) version should leave status =
+    # update_available, because a newer compatible version still exists.
+    old = tmp_path / "mod-1.0.jar"
+    old.write_bytes(_valid_jar_bytes("v1"))
+    target_bytes = _valid_jar_bytes("v2-old-pick")
+    import hashlib
+    target_sha1 = hashlib.sha1(target_bytes).hexdigest()
+
+    mod = InstalledMod(jar_path=old, mod_id="m", display_name="M", version="1.0", sha1="s0")
+    match = ModMatch(
+        mod=mod, source="modrinth", project_id="p",
+        installed=VersionIdentity("vOld", "1.0", _dt(1)),
+        latest=LatestVersion("vLatest", "3.0", _dt(20), download_url="https://x/mod-3.0.jar"),
+    )
+    target = LatestVersion(
+        version_id="vMid", version_number="2.0", date_published=_dt(10),
+        download_url="https://x/mod-2.0.jar", file_hashes={target_sha1},
+    )
+    install_version(match, FakeDownloadProvider(target_bytes), target)
+
+    assert match.installed.version_id == "vMid"
+    assert mod.sha1 == target_sha1
+    # Latest (vLatest) is newer than what we installed (vMid) -> update available.
+    assert match.status == Status.UPDATE_AVAILABLE
 
 
 def test_update_without_url_raises(tmp_path):

@@ -131,15 +131,16 @@ class ModrinthProvider:
             pm.server_side = proj.get("server_side", "unknown")
 
     # ------------------------------------------------------------------ #
-    # Latest version
+    # Versions
     # ------------------------------------------------------------------ #
-    def latest_version(
+    def list_versions(
         self,
         project_id: str,
         loader: str,
         mc_version: str,
         accept_same_minor: bool = True,
-    ) -> Optional[LatestVersion]:
+    ) -> list[LatestVersion]:
+        """All compatible versions for this loader + MC, newest-first."""
         # Filter by loader server-side; filter MC compatibility client-side so we
         # can honor the same-minor rule without facet-exactness surprises.
         versions = self._get(
@@ -147,20 +148,25 @@ class ModrinthProvider:
             params={"loaders": json.dumps([loader])},
         )
         if not isinstance(versions, list):
-            return None
-
+            return []
         compatible = [
             v
             for v in versions
             if isinstance(v, dict)
             and is_mc_compatible(v.get("game_versions", []), mc_version, accept_same_minor)
         ]
-        if not compatible:
-            return None
-
-        # Newest by publish date (Modrinth returns newest-first, but be explicit).
         compatible.sort(key=lambda v: v.get("date_published", ""), reverse=True)
-        return self._to_latest(compatible[0])
+        return [self._to_latest(v) for v in compatible]
+
+    def latest_version(
+        self,
+        project_id: str,
+        loader: str,
+        mc_version: str,
+        accept_same_minor: bool = True,
+    ) -> Optional[LatestVersion]:
+        versions = self.list_versions(project_id, loader, mc_version, accept_same_minor)
+        return versions[0] if versions else None
 
     @staticmethod
     def _to_latest(v: dict) -> LatestVersion:
